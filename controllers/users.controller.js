@@ -4,7 +4,7 @@ const db = require('../config/db');
 exports.getAll = async (req, res) => {
   try {
     const [rows] = await db.query(
-      'SELECT id, nombre, email, rol, activo, created_at FROM users ORDER BY nombre'
+      'SELECT id, nombre, apellido, email, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol, activo FROM users ORDER BY nombre'
     );
     res.json(rows);
   } catch (err) {
@@ -15,7 +15,7 @@ exports.getAll = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const [rows] = await db.query(
-      'SELECT id, nombre, email, rol, activo, created_at FROM users WHERE id = ?',
+      'SELECT id, nombre, apellido, email, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol, activo FROM users WHERE id = ?',
       [req.params.id]
     );
     if (rows.length === 0) return res.status(404).json({ message: 'Usuario no encontrado' });
@@ -26,7 +26,7 @@ exports.getById = async (req, res) => {
 };
 
 exports.create = async (req, res) => {
-  const { nombre, email, password, rol } = req.body;
+  const { nombre, apellido, email, password, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol } = req.body;
   if (!nombre || !email || !password || !rol) {
     return res.status(400).json({ message: 'Campos requeridos: nombre, email, password, rol' });
   }
@@ -34,10 +34,10 @@ exports.create = async (req, res) => {
   try {
     const hash = await bcrypt.hash(password, 12);
     const [result] = await db.query(
-      'INSERT INTO users (nombre, email, password, rol) VALUES (?, ?, ?, ?)',
-      [nombre, email, hash, rol]
+      'INSERT INTO users (nombre, apellido, email, password_hash, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [nombre, apellido, email, hash, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol]
     );
-    res.status(201).json({ id: result.insertId, nombre, email, rol });
+    res.status(201).json({ id: result.insertId, nombre, apellido, email, rol });
   } catch (err) {
     if (err.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ message: 'El email ya está registrado' });
@@ -47,16 +47,16 @@ exports.create = async (req, res) => {
 };
 
 exports.update = async (req, res) => {
-  const { nombre, email, rol, password } = req.body;
+  const { nombre, apellido, email, password, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol } = req.body;
   try {
     let query, params;
     if (password) {
       const hash = await bcrypt.hash(password, 12);
-      query = 'UPDATE users SET nombre = ?, email = ?, rol = ?, password = ? WHERE id = ?';
-      params = [nombre, email, rol, hash, req.params.id];
+      query = 'UPDATE users SET nombre = ?, apellido = ?, email = ?, password_hash = ?, telefono = ?, direccion = ?, tipo_visa = ?, fecha_vencimiento_visa = ?, rol = ? WHERE id = ?';
+      params = [nombre, apellido, email, hash, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol, req.params.id];
     } else {
-      query = 'UPDATE users SET nombre = ?, email = ?, rol = ? WHERE id = ?';
-      params = [nombre, email, rol, req.params.id];
+      query = 'UPDATE users SET nombre = ?, apellido = ?, email = ?, telefono = ?, direccion = ?, tipo_visa = ?, fecha_vencimiento_visa = ?, rol = ? WHERE id = ?';
+      params = [nombre, apellido, email, telefono, direccion, tipo_visa, fecha_vencimiento_visa, rol, req.params.id];
     }
     const [result] = await db.query(query, params);
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Usuario no encontrado' });
@@ -82,7 +82,7 @@ exports.deactivate = async (req, res) => {
 exports.getHistory = async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT uth.*, t.nombre AS equipo
+      `SELECT uth.*, t.numero AS equipo_numero
        FROM user_team_history uth
        JOIN teams t ON uth.team_id = t.id
        WHERE uth.user_id = ?

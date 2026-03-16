@@ -25,6 +25,7 @@ Este documento describe el funcionamiento paso a paso para facilitar la construc
 # 2. FLUJO GENERAL DE NAVEGACIÓN
 
 ## 2.1 Login
+
 - Email
 - Password
 - Redirección automática según rol
@@ -32,6 +33,7 @@ Este documento describe el funcionamiento paso a paso para facilitar la construc
 ## 2.2 Dashboard (según rol)
 
 ### Admin
+
 - Resumen general:
   - Equipos activos
   - Sitios activos
@@ -40,17 +42,20 @@ Este documento describe el funcionamiento paso a paso para facilitar la construc
   - Quejas abiertas
 
 ### Manager
+
 - Inventario
 - Pedidos
 - Herramientas
 - Equipos
 
 ### Accountant
+
 - Reportes quincenales
 - Sitios y asignaciones
 - Resumen financiero
 
 ### Cleaner
+
 - Mis sitios de hoy
 - Marcar trabajo diario
 - Solicitar supplies
@@ -62,7 +67,9 @@ Este documento describe el funcionamiento paso a paso para facilitar la construc
 # 3. MÓDULO DE USUARIOS
 
 ## Crear usuario
+
 Campos:
+
 - Nombre
 - Apellido
 - Dirección
@@ -74,10 +81,12 @@ Campos:
 - Equipo asignado
 
 Reglas:
+
 - Un usuario solo puede pertenecer a un equipo activo
 - Cambio de equipo genera registro en user_team_history
 
 Pantallas:
+
 - Lista de usuarios
 - Crear / Editar usuario
 - Historial de equipo del usuario
@@ -87,14 +96,17 @@ Pantallas:
 # 4. MÓDULO DE EQUIPOS
 
 ## Crear equipo
-- Número de equipo (único)
+
+- Número de equipo (único, varchar)
 - Asignar hasta 2 miembros
 
 Reglas:
+
 - Máximo 2 usuarios por equipo
 - Puede tener múltiples sitios
 
 Pantallas:
+
 - Lista de equipos
 - Detalle del equipo
   - Miembros
@@ -107,7 +119,9 @@ Pantallas:
 # 5. MÓDULO DE SITIOS
 
 ## Crear sitio
+
 Campos:
+
 - Dirección_linea1
 - Dirección_linea2
 - Suburb
@@ -121,7 +135,9 @@ Campos:
 - Información financiera
 
 ## Asignar sitio a equipo
+
 Campos:
+
 - Frecuencia
 - Horas_por_trabajador
 - Hace_bins
@@ -129,6 +145,7 @@ Campos:
 - Fecha_inicio_efectiva
 
 Pantallas:
+
 - Lista de sitios
 - Perfil del sitio
   - Información general
@@ -145,6 +162,7 @@ Objetivo:
 Permitir que cleaners o managers dejen instrucciones importantes.
 
 Campos:
+
 - Sitio
 - Autor
 - Comentario
@@ -152,6 +170,7 @@ Campos:
 - Visibilidad
 
 Pantalla:
+
 - Sección tipo timeline dentro del perfil del sitio
 
 ---
@@ -163,16 +182,23 @@ Pantalla:
 Pantalla: “Mis sitios de hoy”
 
 Para cada sitio asignado:
-- Campo: Horas trabajadas
-- Toggle: Solo bins
+
+- Tipo de entrada: SERVICE / BINS / CUSTOM
+- Valor:
+  - SERVICE: toma horas_por_trabajador desde team_site_assignments
+  - BINS: toma pago_bins (solo si hace_bins = 1)
+  - CUSTOM: valor manual ingresado por el usuario
 - Observaciones
 - Botón: Marcar como completado
 
 Reglas:
-- Solo bins activa interpretación interna como evento bins
-- Si horas > horas asignadas → posible extra
+
+- El backend asigna automáticamente cada log a una semana de `billing_weeks` (lunes a domingo) usando la fecha del log
+- Miembros del mismo equipo pueden ver los logs del equipo
+- Cada cleaner solo puede editar sus propios logs
 
 Estado:
+
 - Pendiente
 - Confirmado
 
@@ -181,16 +207,20 @@ Estado:
 # 8. GENERACIÓN DE REPORTE QUINCENAL
 
 Flujo:
-1. El sistema consulta daily_site_logs por usuario y rango de fechas
-2. Agrupa por sitio
-3. Suma horas
-4. Detecta bins y extras
+
+1. El periodo se define por `billing_periods` (2 semanas) y sus semanas en `billing_weeks`
+   - Reporte al finalizar semana 2 y semana 4 del ciclo operativo
+2. El sistema consulta daily_site_logs del usuario para ese periodo
+3. El usuario puede excluir logs (blacklist) antes de enviar
+4. El sistema calcula totales con logs incluidos (no excluidos)
+5. Se guarda el reporte y la blacklist en `report_excluded_logs`
 
 Pantalla:
+
 - Vista resumen por sitio
-- Total horas
+- Total valor
 - Total bins
-- Botón editar ajustes
+- Lista de logs incluidos/excluidos
 - Botón enviar reporte
 
 Solo Accountant puede aprobar.
@@ -200,7 +230,9 @@ Solo Accountant puede aprobar.
 # 9. SUPPLIES E INVENTARIO
 
 ## Inventario
+
 Campos:
+
 - Nombre
 - Unidad
 - Stock actual
@@ -210,21 +242,26 @@ Campos:
 - Proveedor
 
 Pantallas:
+
 - Lista de inventario
 - Crear supply
 - Editar supply
 
 ## Pedidos
+
 Cleaner:
+
 - Crear pedido
 - Agregar productos y cantidad
 
 Manager/Admin:
+
 - Aprobar
 - Rechazar
 - Marcar como completado
 
 Al completar:
+
 - Descuenta inventario
 
 ---
@@ -232,6 +269,7 @@ Al completar:
 # 10. HERRAMIENTAS Y VEHÍCULOS
 
 ## Herramientas
+
 - Nombre
 - Estado
 - Precio unitario
@@ -240,13 +278,31 @@ Al completar:
 - Ubicación (oficina o asignada)
 
 ## Vehículos
+
 - Matrícula
 - Tipo
+- Marca
+- Modelo
+- Versión
+- Comentarios
+- Características
 - Seguro
 - Regos
-- Fecha mantenimiento
+- Próximo mantenimiento (fecha)
+- Equipo asignado
+
+## Historial de servicios de vehículo
+
+Campos por service:
+- Auto (snapshot: matrícula, tipo, marca, modelo, versión)
+- Equipo (snapshot: número de equipo)
+- Fecha de mantenimiento
+- Km mantenimiento
+- Precio
+- Notas
 
 Pantallas:
+
 - Lista
 - Asignar a equipo
 
@@ -255,16 +311,19 @@ Pantallas:
 # 11. VACACIONES
 
 Cleaner:
+
 - Solicitar vacaciones
   - Fecha inicio
   - Fecha fin
   - Días
 
 Admin:
+
 - Aprobar/Rechazar
 - Asignar reemplazo
 
 Pantalla:
+
 - Calendario general
 - Vista por equipo
 
@@ -273,6 +332,7 @@ Pantalla:
 # 12. QUEJAS (COMPLAINTS)
 
 Campos:
+
 - Sitio
 - Reportado por
 - Categoría
@@ -281,6 +341,7 @@ Campos:
 - Equipo responsable
 
 Pantallas:
+
 - Lista de quejas
 - Filtros por severidad
 - Perfil del sitio muestra historial
@@ -290,12 +351,14 @@ Pantallas:
 # 13. LOGS Y NOTIFICACIONES
 
 Logs:
+
 - Usuario
 - Acción
 - Fecha
 - Tabla afectada
 
 Notificaciones:
+
 - Cambio de sitio
 - Cambio de horas
 - Pedido aprobado
@@ -308,6 +371,7 @@ Notificaciones:
 Uso de latitud y longitud almacenadas.
 
 Pantallas futuras:
+
 - Vista mapa diaria
 - Ruta sugerida por equipo
 
@@ -330,4 +394,3 @@ Registro simple y natural de trabajo diario.
 ---
 
 Este documento define el comportamiento funcional completo actual del sistema y sirve como base para el diseño de todas las pantallas del frontend.
-

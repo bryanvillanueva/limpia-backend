@@ -3,14 +3,16 @@ const auth = require('../middleware/auth');
 const roleGuard = require('../middleware/roleGuard');
 const ctrl = require('../controllers/supplies.controller');
 
-const adminManager = roleGuard(['admin', 'manager']);
-const cleanerOnly = roleGuard(['cleaner']);
+const adminManagerAccountant = roleGuard(['admin', 'manager', 'accountant']);
+const orderCreators = roleGuard(['admin', 'manager', 'accountant', 'cleaner']);
+const allRoles = roleGuard(['admin', 'manager', 'accountant', 'cleaner']);
 
-router.get('/', auth, adminManager, ctrl.getAllOrders);
-router.get('/:id', auth, adminManager, ctrl.getOrderById);
-router.post('/', auth, cleanerOnly, ctrl.createOrder);
-router.put('/:id/approve', auth, adminManager, ctrl.approveOrder);
-router.put('/:id/complete', auth, adminManager, ctrl.completeOrder);
-router.put('/:id/reject', auth, adminManager, ctrl.rejectOrder);
+router.get('/my-team', auth, allRoles, ctrl.getMyTeamOrders);
+router.get('/', auth, adminManagerAccountant, ctrl.getAllOrders);
+router.get('/:id', auth, adminManagerAccountant, ctrl.getOrderById);
+router.post('/', auth, orderCreators, ctrl.createOrder);
+router.put('/:id/approve', auth, adminManagerAccountant, ctrl.approveOrder);
+router.put('/:id/complete', auth, adminManagerAccountant, ctrl.completeOrder);
+router.put('/:id/reject', auth, adminManagerAccountant, ctrl.rejectOrder);
 
 module.exports = router;

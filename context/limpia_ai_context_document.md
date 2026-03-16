@@ -1,4 +1,5 @@
 # Context Document for Codex / Claude Code
+
 ## Project: Limpia Cleaning – Internal Management Platform
 
 ---
@@ -28,6 +29,7 @@ This system is not public-facing. It is an internal operational tool.
 # 2. TECH STACK
 
 ## Frontend
+
 - React
 - Material UI
 - Component-based architecture
@@ -35,12 +37,14 @@ This system is not public-facing. It is an internal operational tool.
 - Centralized theme configuration
 
 ## Backend
+
 - Node.js
 - Express
 - REST API
 - Route-based modular architecture (NOT monolithic)
 
 ## Database
+
 - MySQL
 - Normalized relational schema
 
@@ -53,12 +57,14 @@ This system is not public-facing. It is an internal operational tool.
 There must be a central theme file used across the entire application.
 
 ### Light Mode Colors:
+
 - Background: #ffffff
 - Primary: #26614f
 - Secondary/Surface: #dde7ee
 - Text: #000000
 
 ### Dark Mode Colors:
+
 - Background: #000000
 - Primary: #26614f
 - Secondary/Surface: #465a7e66
@@ -89,6 +95,7 @@ Reusable components include:
 Each screen should compose these reusable components instead of redefining structure.
 
 All forms must:
+
 - Support validation
 - Be reusable
 - Be configurable via props
@@ -139,6 +146,7 @@ Role-based authorization middleware must enforce permissions.
 ## Core Tables
 
 ### users
+
 - id
 - nombre
 - apellido
@@ -152,14 +160,17 @@ Role-based authorization middleware must enforce permissions.
 - activo
 
 ### teams
+
 - id
-- numero (unique)
+- numero (Varchar - unique)
 - activo
 
 Constraint:
+
 - Maximum 2 active users per team
 
 ### user_team_history
+
 - id
 - user_id
 - team_id
@@ -167,6 +178,7 @@ Constraint:
 - fecha_fin
 
 ### clients
+
 - id
 - nombre
 - telefono
@@ -175,6 +187,7 @@ Constraint:
 - contacto_email
 
 ### sites
+
 - id
 - direccion_linea1
 - direccion_linea2
@@ -190,6 +203,7 @@ Constraint:
 - activo
 
 ### team_site_assignments
+
 - id
 - team_id
 - site_id
@@ -201,6 +215,7 @@ Constraint:
 - activo
 
 ### site_comments
+
 - id
 - site_id
 - autor_user_id
@@ -209,6 +224,7 @@ Constraint:
 - visible_para
 
 ### daily_site_logs
+
 - id
 - user_id
 - team_id
@@ -218,17 +234,50 @@ Constraint:
 - solo_bins (boolean)
 - observaciones
 - estado
+- billing_week_id
+- entry_type (SERVICE, BINS, CUSTOM)
+- display_value
 
 ### reports
+
 - id
 - user_id
 - fecha_inicio
 - fecha_fin
+- billing_period_id
 - estado
+- created_at
+- updated_at
 
 Reports are generated from daily_site_logs.
 
+### report_excluded_logs
+
+- id
+- report_id
+- daily_site_log_id
+
+Used for report blacklist: logs excluded by the user when submitting the final report.
+
+### billing_weeks
+
+- id
+- start_date (lunes)
+- end_date (domingo)
+- period_id
+
+Used to assign each daily log to a specific week.
+
+### billing_periods
+
+- id
+- start_date (lunes semana 1)
+- end_date (domingo semana 2)
+
+Each billing period is exactly 2 weeks (fortnight).
+
 ### supplies
+
 - id
 - nombre
 - descripcion
@@ -240,6 +289,7 @@ Reports are generated from daily_site_logs.
 - proveedor_id
 
 ### supply_orders
+
 - id
 - equipo_id
 - user_id
@@ -247,12 +297,14 @@ Reports are generated from daily_site_logs.
 - estado
 
 ### supply_order_items
+
 - id
 - order_id
 - supply_id
 - cantidad
 
 ### tools
+
 - id
 - nombre
 - descripcion
@@ -263,16 +315,39 @@ Reports are generated from daily_site_logs.
 - equipo_id
 
 ### cars
+
 - id
 - matricula
 - tipo
+- marca
+- modelo
+- version
+- comentarios
 - caracteristicas
-- fecha_mantenimiento
+- proximo_mantenimiento_fecha
 - fecha_rego
 - seguro_info
 - equipo_id
 
+### car_services
+
+- id
+- car_id
+- equipo_id
+- car_matricula
+- car_tipo
+- car_marca
+- car_modelo
+- car_version
+- equipo_numero
+- fecha_mantenimiento
+- km_mantenimiento
+- precio
+- notas
+- created_at
+
 ### vacation_requests
+
 - id
 - user_id
 - fecha_inicio
@@ -281,6 +356,7 @@ Reports are generated from daily_site_logs.
 - estado
 
 ### vacation_replacements
+
 - id
 - user_id_reemplazado
 - user_id_reemplazo
@@ -288,6 +364,7 @@ Reports are generated from daily_site_logs.
 - fecha_fin
 
 ### complaints
+
 - id
 - site_id
 - descripcion
@@ -304,13 +381,15 @@ Reports are generated from daily_site_logs.
 
 1. Cleaners log daily work using `daily_site_logs`.
 2. They enter only:
-   - horas_trabajadas
-   - solo_bins toggle
+   - entry_type (`SERVICE`, `BINS`, `CUSTOM`)
+   - display_value (required for `CUSTOM`, optional override in planner-like flows)
+   - observaciones
 3. System calculates payment internally.
-4. Fortnightly reports are auto-generated from daily logs.
+4. Each user submits their own fortnightly report from their daily logs and can exclude selected logs (blacklist).
 5. Site hour changes only apply from next billing cycle.
 6. Inventory decreases only when order is marked completed.
 7. All actions should be logged.
+8. Billing week is resolved from `billing_weeks` (lunes-domingo) and reports map to `billing_periods` (2 semanas).
 
 ---
 
@@ -350,4 +429,3 @@ When generating code:
 This document defines the authoritative structure and philosophy of the Limpia Cleaning system.
 
 All development decisions must align with this architecture.
-

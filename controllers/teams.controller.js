@@ -2,7 +2,7 @@ const db = require('../config/db');
 
 exports.getAll = async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT * FROM teams ORDER BY nombre');
+    const [rows] = await db.query('SELECT * FROM teams ORDER BY numero');
     res.json(rows);
   } catch (err) {
     res.status(500).json({ message: 'Error del servidor', error: err.message });
@@ -15,7 +15,7 @@ exports.getById = async (req, res) => {
     if (teams.length === 0) return res.status(404).json({ message: 'Equipo no encontrado' });
 
     const [members] = await db.query(
-      `SELECT u.id, u.nombre, u.email, u.rol
+      `SELECT u.id, u.nombre, u.apellido, u.email, u.rol, u.email, u.telefono, u.direccion, u.tipo_visa, u.fecha_vencimiento_visa
        FROM user_team_history uth
        JOIN users u ON uth.user_id = u.id
        WHERE uth.team_id = ? AND uth.fecha_fin IS NULL`,
@@ -29,21 +29,27 @@ exports.getById = async (req, res) => {
 };
 
 exports.create = async (req, res) => {
-  const { nombre } = req.body;
-  if (!nombre) return res.status(400).json({ message: 'Nombre requerido' });
+  const { numero } = req.body;
+  if (!numero) return res.status(400).json({ message: 'Numero requerido' });
 
   try {
-    const [result] = await db.query('INSERT INTO teams (nombre) VALUES (?)', [nombre]);
-    res.status(201).json({ id: result.insertId, nombre });
+    const [result] = await db.query('INSERT INTO teams (numero) VALUES (?)', [numero]);
+    res.status(201).json({ id: result.insertId, numero });
   } catch (err) {
+    if (err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({ message: 'El número de equipo ya existe' });
+    }
     res.status(500).json({ message: 'Error del servidor', error: err.message });
   }
 };
 
 exports.update = async (req, res) => {
-  const { nombre } = req.body;
+  const { numero, activo } = req.body;
   try {
-    const [result] = await db.query('UPDATE teams SET nombre = ? WHERE id = ?', [nombre, req.params.id]);
+    const [result] = await db.query(
+      'UPDATE teams SET numero = ?, activo = ? WHERE id = ?',
+      [numero, activo, req.params.id]
+    );
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Equipo no encontrado' });
     res.json({ message: 'Equipo actualizado' });
   } catch (err) {
@@ -89,6 +95,61 @@ exports.addMember = async (req, res) => {
     res.status(500).json({ message: 'Error del servidor', error: err.message });
   } finally {
     conn.release();
+  }
+};
+
+exports.getPortfolio = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT tsa.site_id, tsa.frecuencia, tsa.horas_por_trabajador,
+              tsa.hace_bins, tsa.pago_bins, tsa.fecha_asignacion,
+              s.direccion_linea1, s.suburb, s.state, s.postcode,
+              c.nombre AS cliente_nombre
+       FROM team_site_assignments tsa
+       JOIN sites s ON tsa.site_id = s.id
+       LEFT JOIN clients c ON s.cliente_id = c.id
+       WHERE tsa.team_id = ? AND tsa.activo = 1
+       ORDER BY s.direccion_linea1`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
+exports.getCars = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT id, matricula, tipo, marca, modelo, version, comentarios, caracteristicas, proximo_mantenimiento_fecha, fecha_rego, seguro_info
+       FROM cars
+       WHERE equipo_id = ?
+       ORDER BY matricula`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
+/**
+ * Returns tools assigned to the team (tools.equipo_id = team id).
+ * @param {import('express').Request} req - req.params.id is the team id.
+ * @param {import('express').Response} res - JSON array of tools.
+ */
+exports.getTools = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT *
+       FROM tools
+       WHERE equipo_id = ?
+       ORDER BY nombre`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ message: 'Error del servidor', error: err.message });
   }
 };
 
