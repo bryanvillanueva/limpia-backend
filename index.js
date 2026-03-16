@@ -17,6 +17,9 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
+/** Respond to preflight (OPTIONS) immediately so proxy/app never returns 502 for OPTIONS. */
+app.options('*', (req, res) => res.sendStatus(204));
+
 app.use(express.json());
 
 // Health check (for Railway and to verify server responds)
