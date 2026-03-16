@@ -3,8 +3,26 @@ const express = require('express');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+
+/**
+ * CORS: allow frontend origin(s) and preflight (OPTIONS).
+ * In production, set FRONTEND_URL (e.g. https://tu-app.vercel.app) so only your frontend is allowed.
+ * If unset, allows any origin (development / quick deploy).
+ */
+const corsOptions = {
+  origin: process.env.FRONTEND_URL || true, // true = reflect request origin (any)
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+};
+app.use(cors(corsOptions));
+
 app.use(express.json());
+
+// Health check (for Railway and to verify server responds)
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true });
+});
 
 // Routes
 app.use('/api/auth', require('./routes/auth.routes'));
@@ -23,6 +41,7 @@ app.use('/api/complaints', require('./routes/complaints.routes'));
 app.use('/api/planner', require('./routes/planner.routes'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Limpia backend running on port ${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0'; // 0.0.0.0 required for Railway/fly.io
+app.listen(PORT, HOST, () => {
+  console.log(`Limpia backend running on ${HOST}:${PORT}`);
 });
