@@ -17,8 +17,13 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
-/** Respond to preflight (OPTIONS) immediately so proxy/app never returns 502 for OPTIONS. */
-app.options('*', (req, res) => res.sendStatus(204));
+/** Handle CORS preflight without route-pattern parsing issues in Express 5. */
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  return next();
+});
 
 app.use(express.json());
 
