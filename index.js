@@ -13,6 +13,7 @@ const corsOptions = {
   origin: process.env.FRONTEND_URL || true, // true = reflect request origin (any)
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
+  exposedHeaders: ['Content-Disposition'],
   credentials: true,
 };
 app.use(cors(corsOptions));
@@ -47,6 +48,7 @@ app.use('/api/cars', require('./routes/cars.routes'));
 app.use('/api/vacations', require('./routes/vacations.routes'));
 app.use('/api/complaints', require('./routes/complaints.routes'));
 app.use('/api/planner', require('./routes/planner.routes'));
+app.use('/api/dashboard', require('./routes/dashboard.routes'));
 
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0'; // 0.0.0.0 required for Railway/fly.io

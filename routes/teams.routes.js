@@ -4,9 +4,10 @@ const roleGuard = require('../middleware/roleGuard');
 const ctrl = require('../controllers/teams.controller');
 
 const adminManager = roleGuard(['admin', 'manager']);
+const listRoles = roleGuard(['admin', 'manager', 'accountant']);
 const adminOnly = roleGuard(['admin']);
 
-router.get('/', auth, adminManager, ctrl.getAll);
+router.get('/', auth, listRoles, ctrl.getAll);
 router.get('/:id/portfolio', auth, adminManager, ctrl.getPortfolio);
 router.get('/:id/cars', auth, adminManager, ctrl.getCars);
 router.get('/:id/tools', auth, adminManager, ctrl.getTools);

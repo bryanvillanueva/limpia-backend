@@ -13,7 +13,8 @@ router.get('/period-logs', auth, cleanerAdminAccountant, ctrl.getPeriodLogs);
 router.get('/my-reports', auth, cleanerAdminAccountant, ctrl.getMyReports);
 router.get('/', auth, adminAccountant, ctrl.getAll);
 router.get('/:id', auth, cleanerAdminAccountant, ctrl.getById);
+router.get('/:id/export-excel', auth, cleanerAdminAccountant, ctrl.exportExcel);
 router.post('/generate', auth, cleanerAdminAccountant, ctrl.generate);
-router.put('/:id/approve', auth, accountantOnly, ctrl.approve);
+router.put('/:id/status', auth, adminAccountant, ctrl.updateStatus);
 
 module.exports = router;
