@@ -298,11 +298,23 @@ exports.create = async (req, res) => {
 
   try {
     const assignment = await getAssignmentForUserSite(req.user.id, site_id);
+    let teamId;
+
     if (!assignment) {
-      return res.status(403).json({ message: 'No tienes asignado este sitio' });
-    }
-    if (entry_type === 'BINS' && !assignment.hace_bins) {
-      return res.status(400).json({ message: 'Este sitio no tiene bins habilitados (hace_bins = 0)' });
+      if (entry_type !== 'CUSTOM') {
+        return res.status(400).json({
+          message: 'Este sitio no tiene una asignación activa para tu equipo. Selecciona "Otro" e ingresa el valor manualmente.',
+        });
+      }
+      teamId = await getCurrentUserTeamId(req.user.id);
+      if (!teamId) {
+        return res.status(403).json({ message: 'No tienes un equipo activo' });
+      }
+    } else {
+      teamId = assignment.team_id;
+      if (entry_type === 'BINS' && !assignment.hace_bins) {
+        return res.status(400).json({ message: 'Este sitio no tiene bins habilitados (hace_bins = 0)' });
+      }
     }
 
     const billingWeekId = await getBillingWeekIdByDate(fecha);
@@ -333,7 +345,7 @@ exports.create = async (req, res) => {
              estado = 'pendiente', billing_week_id = ?, entry_type = ?, display_value = ?
          WHERE id = ?`,
         [
-          assignment.team_id,
+          teamId,
           values.horasTrabajadas,
           values.soloBins,
           observaciones || null,
@@ -352,7 +364,7 @@ exports.create = async (req, res) => {
        VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, ?, ?)`,
       [
         req.user.id,
-        assignment.team_id,
+        teamId,
         site_id,
         fecha,
         values.horasTrabajadas,
@@ -420,7 +432,9 @@ exports.update = async (req, res) => {
     if (nextEntryType === 'SERVICE' || nextEntryType === 'BINS') {
       assignment = await getAssignmentForUserSite(current.user_id, current.site_id);
       if (!assignment) {
-        return res.status(404).json({ message: 'No existe asignación activa para este sitio/equipo' });
+        return res.status(400).json({
+          message: 'Este sitio no tiene una asignación activa para tu equipo. Selecciona "Otro" e ingresa el valor manualmente.',
+        });
       }
       if (nextEntryType === 'BINS' && !assignment.hace_bins) {
         return res.status(400).json({ message: 'Este sitio no tiene bins habilitados (hace_bins = 0)' });

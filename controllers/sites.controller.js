@@ -446,6 +446,35 @@ exports.getMySites = async (req, res) => {
   }
 };
 
+/**
+ * Busca sitios activos por dirección, suburb o cliente para asociarlos a un log.
+ * Abierto a cualquier rol autenticado (a diferencia de getAll, que es solo admin/manager/accountant).
+ * No incluye tarifas (horas_por_trabajador/pago_bins) porque dependen de la asignación
+ * equipo-sitio, que puede no existir para un sitio ocasional.
+ * @param {import('express').Request} req - Query param `q` (mínimo 2 caracteres).
+ * @param {import('express').Response} res - JSON array (máx 20 resultados).
+ */
+exports.search = async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) return res.json([]);
+  try {
+    const like = `%${q}%`;
+    const [rows] = await db.query(
+      `SELECT s.id, s.direccion_linea1, s.direccion_linea2, s.suburb, c.nombre AS cliente_nombre
+       FROM sites s
+       LEFT JOIN clients c ON s.cliente_id = c.id
+       WHERE s.activo = 1
+         AND (s.direccion_linea1 LIKE ? OR s.suburb LIKE ? OR c.nombre LIKE ?)
+       ORDER BY s.direccion_linea1
+       LIMIT 20`,
+      [like, like, like]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
 exports.update = async (req, res) => {
   const { direccion_linea1, direccion_linea2, suburb, state, postcode, country, latitud, longitud, cliente_id, contrato, finanzas } = req.body;
   try {
