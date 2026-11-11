@@ -2,6 +2,7 @@ const db = require('../config/db');
 const billingCycle = require('../services/billingCycle.service');
 const XLSX = require('xlsx');
 const { sendMail, isMailConfigured } = require('../services/mail.service');
+const { createNotification } = require('../services/notifications.service');
 
 /**
  * Normalizes a value (Date object or string) to YYYY-MM-DD string.
@@ -390,6 +391,15 @@ exports.generate = async (req, res) => {
       }
     }
 
+    // In-app notification for admins/accountants, independent of the email (best effort)
+    if (finalStatus === 'Enviado' && req.user.rol === 'cleaner') {
+      try {
+        await notifyReportSubmitted(await loadReportWithAuthor(reportId), grid);
+      } catch (notifyErr) {
+        console.error('Report notification failed:', notifyErr.message);
+      }
+    }
+
     res.status(201).json({
       id: reportId,
       user_id: req.user.id,
@@ -629,6 +639,43 @@ async function sendReportEmail(report) {
     }],
   });
   return { to };
+}
+
+/**
+ * Notifies every active admin and accountant (in the app) that a cleaner submitted a report.
+ * The notification links to the report through ref_id (type 'report_submitted').
+ * @param {object} report - Row from loadReportWithAuthor.
+ * @param {object} grid - Result of buildReportGrid for the report.
+ * @returns {Promise<number>} How many users were notified.
+ */
+async function notifyReportSubmitted(report, grid) {
+  const [recipients] = await db.query(
+    `SELECT id FROM users WHERE rol IN ('admin', 'accountant') AND activo = 1`
+  );
+  if (recipients.length === 0) return 0;
+
+  const fechaInicio = toDateStr(report.fecha_inicio);
+  const fechaFin = toDateStr(report.fecha_fin);
+  const userName = `${report.generado_por} ${report.generado_por_apellido || ''}`.trim();
+  const teamNumero = grid.sites.length > 0 ? grid.sites[0].team_numero : null;
+  const totalHoras = Number(grid.grand_total || 0).toFixed(2).replace(/\.?0+$/, '') || '0';
+
+  const message = [
+    `${fmtDayMonth(fechaInicio)} – ${fmtDayMonth(fechaFin)}`,
+    teamNumero ? `Equipo ${teamNumero}` : null,
+    `${totalHoras} horas`,
+  ].filter(Boolean).join(' · ');
+
+  for (const { id } of recipients) {
+    await createNotification(null, {
+      userId: Number(id),
+      type: 'report_submitted',
+      title: `${userName} envió un reporte de horas`,
+      message,
+      refId: Number(report.id),
+    });
+  }
+  return recipients.length;
 }
 
 /**
