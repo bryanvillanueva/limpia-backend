@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const xlsx = require('xlsx');
+const { createNotification } = require('../services/notifications.service');
 
 /**
  * Normalizes a header key to compare CSV/XLSX columns safely.
@@ -160,7 +161,8 @@ exports.getAll = async (req, res) => {
                FROM team_site_assignments tsa
                JOIN teams t ON tsa.team_id = t.id
                WHERE tsa.site_id = s.id AND tsa.activo = 1
-              ) AS equipos
+              ) AS equipos,
+              EXISTS(SELECT 1 FROM one_off_sites o WHERE o.site_id = s.id AND o.reviewed_at IS NULL) AS ocasional
        FROM sites s
        LEFT JOIN clients c ON s.cliente_id = c.id
        ORDER BY s.id`
@@ -174,7 +176,8 @@ exports.getAll = async (req, res) => {
 exports.getById = async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT s.*, c.nombre AS cliente_nombre
+      `SELECT s.*, c.nombre AS cliente_nombre,
+              EXISTS(SELECT 1 FROM one_off_sites o WHERE o.site_id = s.id AND o.reviewed_at IS NULL) AS ocasional
        FROM sites s
        LEFT JOIN clients c ON s.cliente_id = c.id
        WHERE s.id = ?`,
@@ -475,6 +478,84 @@ exports.search = async (req, res) => {
   }
 };
 
+const QUICK_SITES_PER_DAY = 10;
+
+/**
+ * POST /api/sites/quick
+ * A cleaner registers a site that does not exist yet by typing its address.
+ * Creates a minimal active site (no client, no team assignment) flagged as one-off in
+ * one_off_sites, and notifies admins/managers so they can review it.
+ * If an active site with the same address (and suburb, when given) already exists, that
+ * site is returned instead of creating a duplicate ({ existing: true }).
+ * Body: { direccion_linea1, suburb? }.
+ */
+exports.quickCreate = async (req, res) => {
+  const clean = (v) => String(v || '').trim().replace(/\s+/g, ' ');
+  const direccion = clean(req.body.direccion_linea1);
+  const suburb = clean(req.body.suburb) || null;
+
+  if (direccion.length < 5 || direccion.length > 255) {
+    return res.status(400).json({ message: 'La dirección debe tener entre 5 y 255 caracteres' });
+  }
+  if (suburb && suburb.length > 100) {
+    return res.status(400).json({ message: 'El suburb no puede superar 100 caracteres' });
+  }
+
+  const conn = await db.getConnection();
+  try {
+    const [dup] = await conn.query(
+      `SELECT id, direccion_linea1, suburb FROM sites
+       WHERE activo = 1
+         AND LOWER(TRIM(direccion_linea1)) = LOWER(?)
+         AND (? IS NULL OR LOWER(TRIM(COALESCE(suburb, ''))) = LOWER(?))
+       LIMIT 1`,
+      [direccion, suburb, suburb || '']
+    );
+    if (dup.length > 0) {
+      return res.json({ id: Number(dup[0].id), direccion_linea1: dup[0].direccion_linea1, suburb: dup[0].suburb, existing: true });
+    }
+
+    // Keeps the list from filling up with junk if someone spams the endpoint
+    const [[{ today }]] = await conn.query(
+      'SELECT COUNT(*) AS today FROM one_off_sites WHERE created_by = ? AND created_at >= CURDATE()',
+      [req.user.id]
+    );
+    if (Number(today) >= QUICK_SITES_PER_DAY) {
+      return res.status(429).json({ message: `Alcanzaste el máximo de ${QUICK_SITES_PER_DAY} sitios nuevos por día. Pide a un administrador que los agregue.` });
+    }
+
+    const [[me]] = await conn.query('SELECT nombre, apellido FROM users WHERE id = ?', [req.user.id]);
+    const [admins] = await conn.query("SELECT id FROM users WHERE rol IN ('admin', 'manager') AND activo = 1");
+
+    await conn.beginTransaction();
+    const [result] = await conn.query(
+      'INSERT INTO sites (direccion_linea1, suburb, activo) VALUES (?, ?, 1)',
+      [direccion, suburb]
+    );
+    const siteId = result.insertId;
+    await conn.query('INSERT INTO one_off_sites (site_id, created_by) VALUES (?, ?)', [siteId, req.user.id]);
+
+    const who = `${me?.nombre || ''} ${me?.apellido || ''}`.trim() || 'Un limpiador';
+    for (const { id } of admins) {
+      await createNotification(conn, {
+        userId: Number(id),
+        type: 'site_created',
+        title: `${who} agregó un sitio nuevo`,
+        message: `${[direccion, suburb].filter(Boolean).join(', ')} · pendiente de revisar`,
+        refId: siteId,
+      });
+    }
+    await conn.commit();
+
+    return res.status(201).json({ id: siteId, direccion_linea1: direccion, suburb, existing: false });
+  } catch (err) {
+    try { await conn.rollback(); } catch { /* no open transaction */ }
+    return res.status(500).json({ message: 'Error del servidor', error: err.message });
+  } finally {
+    conn.release();
+  }
+};
+
 exports.update = async (req, res) => {
   const { direccion_linea1, direccion_linea2, suburb, state, postcode, country, latitud, longitud, cliente_id, contrato, finanzas } = req.body;
   try {
@@ -483,6 +564,8 @@ exports.update = async (req, res) => {
       [direccion_linea1, direccion_linea2, suburb, state, postcode, country, latitud, longitud, cliente_id, contrato, finanzas, req.params.id]
     );
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Sitio no encontrado' });
+    // An admin editing a cleaner-created site counts as reviewing it (removes the "puntual" flag)
+    await db.query('UPDATE one_off_sites SET reviewed_at = NOW() WHERE site_id = ? AND reviewed_at IS NULL', [req.params.id]);
     res.json({ message: 'Sitio actualizado' });
   } catch (err) {
     res.status(500).json({ message: 'Error del servidor', error: err.message });
