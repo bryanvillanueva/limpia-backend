@@ -612,11 +612,13 @@ exports.addComment = async (req, res) => {
 exports.getLogs = async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT dsl.*, u.nombre AS limpiador
+      `SELECT dsl.*, DATE_FORMAT(dsl.fecha, '%Y-%m-%d') AS fecha,
+              u.nombre AS limpiador, u.apellido AS limpiador_apellido, t.numero AS team_numero
        FROM daily_site_logs dsl
        JOIN users u ON dsl.user_id = u.id
+       LEFT JOIN teams t ON dsl.team_id = t.id
        WHERE dsl.site_id = ?
-       ORDER BY dsl.fecha DESC`,
+       ORDER BY dsl.fecha DESC, dsl.id DESC`,
       [req.params.id]
     );
     res.json(rows);
