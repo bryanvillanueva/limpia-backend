@@ -39,6 +39,8 @@ app.use('/api/teams', require('./routes/teams.routes'));
 app.use('/api/clients', require('./routes/clients.routes'));
 app.use('/api/sites', require('./routes/sites.routes'));
 app.use('/api/logs', require('./routes/logs.routes'));
+app.use('/api/log-shares', require('./routes/logShares.routes'));
+app.use('/api/notifications', require('./routes/notifications.routes'));
 app.use('/api/reports', require('./routes/reports.routes'));
 app.use('/api/supplies', require('./routes/supplies.routes'));
 app.use('/api/supply-orders', require('./routes/supplyOrders.routes'));
