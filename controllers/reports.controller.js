@@ -347,8 +347,12 @@ exports.getMyReports = async (req, res) => {
 exports.generate = async (req, res) => {
   const { billing_period_id, fecha_inicio, fecha_fin, estado } = req.body;
 
-  const finalStatus = estado || 'Enviado';
-  if (!['Borrador', 'Enviado', 'Pagado', 'Devuelto', 'Eliminado'].includes(finalStatus)) {
+  // Accept any capitalization ('enviado', 'Enviado') and store the canonical one
+  const VALID_STATUSES = ['Borrador', 'Enviado', 'Pagado', 'Devuelto', 'Eliminado'];
+  const finalStatus = estado
+    ? VALID_STATUSES.find((s) => s.toLowerCase() === String(estado).trim().toLowerCase())
+    : 'Enviado';
+  if (!finalStatus) {
     return res.status(400).json({ message: 'estado inválido' });
   }
 
