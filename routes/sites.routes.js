@@ -9,6 +9,7 @@ const adminOnly = roleGuard(['admin']);
 
 router.get('/', auth, listRoles, ctrl.getAll);
 router.get('/my-sites', auth, ctrl.getMySites);
+router.get('/search', auth, ctrl.search);
 router.get('/:id/assignments', auth, ctrl.getAssignments);
 router.get('/:id/comments', auth, ctrl.getComments);
 router.get('/:id/logs', auth, listRoles, ctrl.getLogs);
