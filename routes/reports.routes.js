@@ -16,6 +16,7 @@ router.get('/:id', auth, cleanerAdminAccountant, ctrl.getById);
 router.get('/:id/export-excel', auth, cleanerAdminAccountant, ctrl.exportExcel);
 router.post('/:id/send-email', auth, cleanerAdminAccountant, ctrl.sendEmail);
 router.post('/:id/submit', auth, roleGuard(['cleaner']), ctrl.submit);
+router.delete('/:id', auth, roleGuard(['cleaner']), ctrl.remove);
 router.post('/generate', auth, cleanerAdminAccountant, ctrl.generate);
 router.put('/:id/status', auth, adminAccountant, ctrl.updateStatus);
 

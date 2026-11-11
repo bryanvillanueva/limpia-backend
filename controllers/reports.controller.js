@@ -733,6 +733,34 @@ exports.submit = async (req, res) => {
 };
 
 /**
+ * DELETE /api/reports/:id
+ * The author deletes a report that has not been sent (status 'Borrador').
+ * Reports that were already sent (Enviado, Pagado, Devuelto, Eliminado) cannot be deleted here.
+ * The status check is part of the DELETE itself, so a report submitted a moment earlier
+ * (another tab, double click) is never removed. Its excluded-log rows go away by cascade.
+ */
+exports.remove = async (req, res) => {
+  try {
+    const report = await loadReportWithAuthor(req.params.id);
+    if (!report) return res.status(404).json({ message: 'Reporte no encontrado' });
+    if (Number(report.user_id) !== Number(req.user.id)) {
+      return res.status(403).json({ message: 'Solo quien generó el reporte puede eliminarlo' });
+    }
+
+    const [result] = await db.query(
+      "DELETE FROM reports WHERE id = ? AND user_id = ? AND estado = 'Borrador'",
+      [report.id, req.user.id]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(409).json({ message: 'Solo se pueden eliminar reportes en borrador que no hayan sido enviados' });
+    }
+    return res.json({ message: 'Reporte eliminado', id: Number(report.id) });
+  } catch (err) {
+    return res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
+/**
  * POST /api/reports/:id/send-email
  * Sends (or re-sends) the report by email to the admin address.
  * The author can send their own report; admin/accountant can send any.
