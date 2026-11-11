@@ -1,6 +1,7 @@
 const db = require('../config/db');
 const billingCycle = require('../services/billingCycle.service');
 const XLSX = require('xlsx');
+const { sendMail, isMailConfigured } = require('../services/mail.service');
 
 /**
  * Normalizes a value (Date object or string) to YYYY-MM-DD string.
@@ -370,6 +371,25 @@ exports.generate = async (req, res) => {
 
     const data = await buildReportData(req.user.id, range.fechaInicio, range.fechaFin);
     const grid = buildReportGrid(data.included_logs, range.fechaInicio, range.fechaFin);
+
+    // A cleaner's submitted report is emailed to the admin automatically.
+    // A mail failure must never undo or fail the report itself, so it is only reported back.
+    let email = { sent: false, reason: 'skipped' };
+    if (finalStatus === 'Enviado' && req.user.rol === 'cleaner') {
+      if (!isMailConfigured()) {
+        email = { sent: false, reason: 'not_configured' };
+      } else {
+        try {
+          const created = await loadReportWithAuthor(reportId);
+          const { to } = await sendReportEmail(created);
+          email = { sent: true, to };
+        } catch (mailErr) {
+          console.error('Report email failed:', mailErr.message);
+          email = { sent: false, reason: 'error', message: mailErr.message };
+        }
+      }
+    }
+
     res.status(201).json({
       id: reportId,
       user_id: req.user.id,
@@ -380,9 +400,256 @@ exports.generate = async (req, res) => {
       summary: data.summary,
       included_logs: data.included_logs,
       grid,
+      email,
     });
   } catch (err) {
     res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
+/**
+ * Loads a report together with its author's name.
+ * @param {number|string} reportId - reports.id.
+ * @returns {Promise<object|null>} Report row (with generado_por / generado_por_apellido) or null.
+ */
+async function loadReportWithAuthor(reportId) {
+  const [rows] = await db.query(
+    `SELECT r.*, u.nombre AS generado_por, u.apellido AS generado_por_apellido
+     FROM reports r
+     JOIN users u ON r.user_id = u.id
+     WHERE r.id = ?`,
+    [reportId]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Builds the Excel file of a report. Shared by the download endpoint and the email.
+ * @param {object} report - Row from loadReportWithAuthor.
+ * @returns {Promise<{buf:Buffer, fileName:string, grid:object, userName:string, teamNumero:*, fechaInicio:string, fechaFin:string}>}
+ */
+async function buildReportExcel(report) {
+  const fechaInicio = toDateStr(report.fecha_inicio);
+  const fechaFin = toDateStr(report.fecha_fin);
+
+  const data = await buildReportData(Number(report.user_id), fechaInicio, fechaFin);
+  const grid = buildReportGrid(data.included_logs, fechaInicio, fechaFin);
+
+  // Build Excel workbook
+  const wb = XLSX.utils.book_new();
+  const wsData = [];
+
+  const teamNumero = grid.sites.length > 0 ? grid.sites[0].team_numero : '';
+  const userName = `${report.generado_por} ${report.generado_por_apellido || ''}`.trim();
+
+  const fmtDMY = (d) => {
+    const dt = new Date(d + 'T00:00:00');
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    return `${dd}/${mm}/${dt.getFullYear()}`;
+  };
+
+  // Helper: build site rows for one week (no header, no totals)
+  const buildWeekSiteRows = (weekDates, weekNumber) => {
+    const rows = [];
+    const mondayDate = fmtDMY(weekDates[0]);
+
+    for (const site of grid.sites) {
+      const hasData = weekDates.some(d => site.days[d]);
+      if (!hasData) continue;
+
+      const siteLabel = [site.sitio, site.suburb].filter(Boolean).join(', ');
+      const comments = site.comments
+        .filter(c => weekDates.includes(c.fecha))
+        .map(c => c.observaciones)
+        .join('; ');
+
+      let rowTotal = 0;
+      const row = [teamNumero, weekNumber, mondayDate, userName, siteLabel, site.frecuencia || ''];
+      for (const d of weekDates) {
+        const val = site.days[d] ? site.days[d].total : 0;
+        row.push(val || '');
+        rowTotal += val;
+      }
+      row.push(comments, rowTotal || '');
+      rows.push(row);
+    }
+
+    return rows;
+  };
+
+  // Header (only once)
+  wsData.push([
+    'Equipo #', 'Semana #', 'Semana empezando Lunes',
+    'Nombre', 'Sitio', 'Frecuencia',
+    'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo',
+    'Comentarios', 'Total Horas',
+  ]);
+
+  // Week 1 rows
+  for (const row of buildWeekSiteRows(grid.week1_dates, 1)) wsData.push(row);
+
+  // Blank separator
+  wsData.push([]);
+
+  // Week 2 rows
+  for (const row of buildWeekSiteRows(grid.week2_dates, 2)) wsData.push(row);
+
+  // Grand total row (sum of both weeks)
+  const grandTotalRow = ['', '', '', '', 'TOTAL', ''];
+  for (let i = 0; i < 7; i++) grandTotalRow.push(''); // empty day columns
+  grandTotalRow.push('', grid.grand_total || '');
+  wsData.push(grandTotalRow);
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  // Center-align hours columns (cols 6-12) and Total Horas (col 14)
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    for (let c = 6; c <= 12; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      if (ws[addr]) ws[addr].s = { alignment: { horizontal: 'center' } };
+    }
+    const totalAddr = XLSX.utils.encode_cell({ r, c: 14 });
+    if (ws[totalAddr]) ws[totalAddr].s = { alignment: { horizontal: 'center' } };
+  }
+
+  // Column widths
+  ws['!cols'] = [
+    { wch: 10 }, // Equipo #
+    { wch: 10 }, // Semana #
+    { wch: 24 }, // Semana empezando Lunes
+    { wch: 22 }, // Nombre
+    { wch: 35 }, // Sitio
+    { wch: 18 }, // Frecuencia
+    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, // 7 days
+    { wch: 30 }, // Comentarios
+    { wch: 12 }, // Total Horas
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Time Sheet');
+
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+  // File name
+  const teamName = teamNumero || 'Team';
+  const fmtDM = (d) => {
+    const dt = new Date(d + 'T00:00:00');
+    return `${String(dt.getDate()).padStart(2, '0')} ${String(dt.getMonth() + 1).padStart(2, '0')}`;
+  };
+  const year = new Date(fechaFin + 'T00:00:00').getFullYear();
+  const fileName = `Time Sheet - ${teamName} - (${userName}) semana del ${fmtDM(fechaInicio)} al ${fmtDM(fechaFin)} del ${year}.xlsx`;
+
+  return { buf, fileName, grid, userName, teamNumero, fechaInicio, fechaFin };
+}
+
+const SPANISH_MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+/** 'YYYY-MM-DD' -> '9 nov'. */
+function fmtDayMonth(str) {
+  const [, m, d] = str.split('-').map(Number);
+  return `${d} ${SPANISH_MONTHS[m - 1]}`;
+}
+
+/** Escapes text before putting it in the HTML body of an email. */
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+/**
+ * Emails a report to the admin address with the Excel attached.
+ * Recipient: REPORT_EMAIL_TO (default admin@limpiacleaning.com).
+ * The login link uses APP_URL (or FRONTEND_URL) when set.
+ * @param {object} report - Row from loadReportWithAuthor.
+ * @returns {Promise<{to:string}>}
+ */
+async function sendReportEmail(report) {
+  const to = process.env.REPORT_EMAIL_TO || 'admin@limpiacleaning.com';
+  const { buf, fileName, grid, userName, teamNumero, fechaInicio, fechaFin } = await buildReportExcel(report);
+
+  const subject = fileName.replace(/\.xlsx$/i, '');
+  const period = `${fmtDayMonth(fechaInicio)} al ${fmtDayMonth(fechaFin)} de ${fechaFin.slice(0, 4)}`;
+  const totalHoras = Number(grid.grand_total || 0).toFixed(2).replace(/\.?0+$/, '') || '0';
+  const sitios = grid.sites.length;
+  const appUrl = (process.env.APP_URL || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  const loginUrl = appUrl ? `${appUrl}/login` : '';
+
+  const summaryLines = [
+    ['Limpiador', userName],
+    ...(teamNumero ? [['Equipo', String(teamNumero)]] : []),
+    ['Período', period],
+    ['Total de horas', totalHoras],
+    ['Sitios trabajados', String(sitios)],
+  ];
+
+  const text = [
+    'Hola,',
+    '',
+    `Este es el reporte de horas de ${userName} correspondiente al período del ${period}. Lo encontrarás adjunto en formato Excel.`,
+    '',
+    'Resumen:',
+    ...summaryLines.map(([k, v]) => `- ${k}: ${v}`),
+    '',
+    'Este reporte fue generado con la app de Limpia Cleaning.'
+      + ' Si lo deseas, también puedes revisarlo iniciando sesión en la app con el usuario que te enviamos por correo.',
+    ...(loginUrl ? [`Iniciar sesión: ${loginUrl}`] : []),
+    '',
+    'Saludos,',
+    'Limpia Cleaning',
+  ].join('\n');
+
+  const html = `
+<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#1a1a1a;max-width:560px">
+  <p>Hola,</p>
+  <p>Este es el reporte de horas de <strong>${escapeHtml(userName)}</strong> correspondiente al período del
+     ${escapeHtml(period)}. Lo encontrarás adjunto en formato Excel.</p>
+  <table style="border-collapse:collapse;margin:12px 0;width:100%">
+    ${summaryLines.map(([k, v]) => `<tr>
+      <td style="padding:6px 12px;background:#f1f8f4;border:1px solid #e5e7eb;color:#637381">${escapeHtml(k)}</td>
+      <td style="padding:6px 12px;border:1px solid #e5e7eb;font-weight:600">${escapeHtml(v)}</td>
+    </tr>`).join('')}
+  </table>
+  <p>Este reporte fue generado con la app de <strong>Limpia Cleaning</strong>.
+     Si lo deseas, también puedes revisarlo iniciando sesión en la app con el usuario que te enviamos por correo.</p>
+  ${loginUrl ? `<p><a href="${escapeHtml(loginUrl)}" style="display:inline-block;background:#26614f;color:#ffffff;padding:10px 20px;border-radius:8px;text-decoration:none;font-weight:600">Iniciar sesión</a></p>` : ''}
+  <p style="color:#637381">Saludos,<br>Limpia Cleaning</p>
+</div>`;
+
+  await sendMail({
+    to,
+    subject,
+    text,
+    html,
+    attachments: [{
+      filename: fileName,
+      content: buf,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }],
+  });
+  return { to };
+}
+
+/**
+ * POST /api/reports/:id/send-email
+ * Sends (or re-sends) the report by email to the admin address.
+ * The author can send their own report; admin/accountant can send any.
+ */
+exports.sendEmail = async (req, res) => {
+  try {
+    const report = await loadReportWithAuthor(req.params.id);
+    if (!report) return res.status(404).json({ message: 'Reporte no encontrado' });
+    if (!canAccessAllReports(req.user.rol) && Number(report.user_id) !== Number(req.user.id)) {
+      return res.status(403).json({ message: 'No tienes acceso a este reporte' });
+    }
+    if (!isMailConfigured()) {
+      return res.status(503).json({ message: 'El envío de correo no está configurado en el servidor' });
+    }
+    const { to } = await sendReportEmail(report);
+    return res.json({ sent: true, to });
+  } catch (err) {
+    return res.status(502).json({ message: 'No se pudo enviar el correo', error: err.message });
   }
 };
 
@@ -393,130 +660,13 @@ exports.generate = async (req, res) => {
  */
 exports.exportExcel = async (req, res) => {
   try {
-    const [rows] = await db.query(
-      `SELECT r.*, u.nombre AS generado_por, u.apellido AS generado_por_apellido
-       FROM reports r
-       JOIN users u ON r.user_id = u.id
-       WHERE r.id = ?`,
-      [req.params.id]
-    );
-    if (rows.length === 0) return res.status(404).json({ message: 'Reporte no encontrado' });
-
-    const report = rows[0];
+    const report = await loadReportWithAuthor(req.params.id);
+    if (!report) return res.status(404).json({ message: 'Reporte no encontrado' });
     if (!canAccessAllReports(req.user.rol) && Number(report.user_id) !== Number(req.user.id)) {
       return res.status(403).json({ message: 'No tienes acceso a este reporte' });
     }
 
-    const fechaInicio = toDateStr(report.fecha_inicio);
-    const fechaFin = toDateStr(report.fecha_fin);
-
-    const data = await buildReportData(Number(report.user_id), fechaInicio, fechaFin);
-    const grid = buildReportGrid(data.included_logs, fechaInicio, fechaFin);
-
-    // Build Excel workbook
-    const wb = XLSX.utils.book_new();
-    const wsData = [];
-
-    const teamNumero = grid.sites.length > 0 ? grid.sites[0].team_numero : '';
-    const userName = `${report.generado_por} ${report.generado_por_apellido || ''}`.trim();
-
-    const fmtDMY = (d) => {
-      const dt = new Date(d + 'T00:00:00');
-      const dd = String(dt.getDate()).padStart(2, '0');
-      const mm = String(dt.getMonth() + 1).padStart(2, '0');
-      return `${dd}/${mm}/${dt.getFullYear()}`;
-    };
-
-    // Helper: build site rows for one week (no header, no totals)
-    const buildWeekSiteRows = (weekDates, weekNumber) => {
-      const rows = [];
-      const mondayDate = fmtDMY(weekDates[0]);
-
-      for (const site of grid.sites) {
-        const hasData = weekDates.some(d => site.days[d]);
-        if (!hasData) continue;
-
-        const siteLabel = [site.sitio, site.suburb].filter(Boolean).join(', ');
-        const comments = site.comments
-          .filter(c => weekDates.includes(c.fecha))
-          .map(c => c.observaciones)
-          .join('; ');
-
-        let rowTotal = 0;
-        const row = [teamNumero, weekNumber, mondayDate, userName, siteLabel, site.frecuencia || ''];
-        for (const d of weekDates) {
-          const val = site.days[d] ? site.days[d].total : 0;
-          row.push(val || '');
-          rowTotal += val;
-        }
-        row.push(comments, rowTotal || '');
-        rows.push(row);
-      }
-
-      return rows;
-    };
-
-    // Header (only once)
-    wsData.push([
-      'Equipo #', 'Semana #', 'Semana empezando Lunes',
-      'Nombre', 'Sitio', 'Frecuencia',
-      'Lunes', 'Martes', 'Miercoles', 'Jueves', 'Viernes', 'Sabado', 'Domingo',
-      'Comentarios', 'Total Horas',
-    ]);
-
-    // Week 1 rows
-    for (const row of buildWeekSiteRows(grid.week1_dates, 1)) wsData.push(row);
-
-    // Blank separator
-    wsData.push([]);
-
-    // Week 2 rows
-    for (const row of buildWeekSiteRows(grid.week2_dates, 2)) wsData.push(row);
-
-    // Grand total row (sum of both weeks)
-    const grandTotalRow = ['', '', '', '', 'TOTAL', ''];
-    for (let i = 0; i < 7; i++) grandTotalRow.push(''); // empty day columns
-    grandTotalRow.push('', grid.grand_total || '');
-    wsData.push(grandTotalRow);
-
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-    // Center-align hours columns (cols 6-12) and Total Horas (col 14)
-    const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-    for (let r = range.s.r; r <= range.e.r; r++) {
-      for (let c = 6; c <= 12; c++) {
-        const addr = XLSX.utils.encode_cell({ r, c });
-        if (ws[addr]) ws[addr].s = { alignment: { horizontal: 'center' } };
-      }
-      const totalAddr = XLSX.utils.encode_cell({ r, c: 14 });
-      if (ws[totalAddr]) ws[totalAddr].s = { alignment: { horizontal: 'center' } };
-    }
-
-    // Column widths
-    ws['!cols'] = [
-      { wch: 10 }, // Equipo #
-      { wch: 10 }, // Semana #
-      { wch: 24 }, // Semana empezando Lunes
-      { wch: 22 }, // Nombre
-      { wch: 35 }, // Sitio
-      { wch: 18 }, // Frecuencia
-      { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, // 7 days
-      { wch: 30 }, // Comentarios
-      { wch: 12 }, // Total Horas
-    ];
-
-    XLSX.utils.book_append_sheet(wb, ws, 'Time Sheet');
-
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-
-    // File name
-    const teamName = teamNumero || 'Team';
-    const fmtDM = (d) => {
-      const dt = new Date(d + 'T00:00:00');
-      return `${String(dt.getDate()).padStart(2, '0')} ${String(dt.getMonth() + 1).padStart(2, '0')}`;
-    };
-    const year = new Date(fechaFin + 'T00:00:00').getFullYear();
-    const fileName = `Time Sheet - ${teamName} - (${userName}) semana del ${fmtDM(fechaInicio)} al ${fmtDM(fechaFin)} del ${year}.xlsx`;
+    const { buf, fileName } = await buildReportExcel(report);
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
