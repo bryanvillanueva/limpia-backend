@@ -218,7 +218,9 @@ exports.getAll = async (req, res) => {
        LEFT JOIN user_team_history uth ON uth.user_id = r.user_id AND uth.fecha_fin IS NULL
        LEFT JOIN teams t ON t.id = uth.team_id
        LEFT JOIN billing_periods bp ON r.billing_period_id = bp.id
-       ORDER BY r.id DESC`
+       WHERE r.estado <> 'Borrador' OR r.user_id = ?
+       ORDER BY r.id DESC`,
+      [req.user.id]
     );
     res.json(rows);
   } catch (err) {
@@ -351,7 +353,8 @@ exports.generate = async (req, res) => {
   const VALID_STATUSES = ['Borrador', 'Enviado', 'Pagado', 'Devuelto', 'Eliminado'];
   const finalStatus = estado
     ? VALID_STATUSES.find((s) => s.toLowerCase() === String(estado).trim().toLowerCase())
-    : 'Enviado';
+    // A cleaner's report starts as a draft so it can be reviewed; it only goes out through submit()
+    : (req.user.rol === 'cleaner' ? 'Borrador' : 'Enviado');
   if (!finalStatus) {
     return res.status(400).json({ message: 'estado inválido' });
   }
@@ -377,31 +380,10 @@ exports.generate = async (req, res) => {
     const data = await buildReportData(req.user.id, range.fechaInicio, range.fechaFin);
     const grid = buildReportGrid(data.included_logs, range.fechaInicio, range.fechaFin);
 
-    // A cleaner's submitted report is emailed to the admin automatically.
-    // A mail failure must never undo or fail the report itself, so it is only reported back.
+    // Only when explicitly created as 'Enviado' (normally reports are sent later through submit())
     let email = { sent: false, reason: 'skipped' };
     if (finalStatus === 'Enviado' && req.user.rol === 'cleaner') {
-      if (!isMailConfigured()) {
-        email = { sent: false, reason: 'not_configured' };
-      } else {
-        try {
-          const created = await loadReportWithAuthor(reportId);
-          const { to } = await sendReportEmail(created);
-          email = { sent: true, to };
-        } catch (mailErr) {
-          console.error('Report email failed:', mailErr.message);
-          email = { sent: false, reason: 'error', message: mailErr.message };
-        }
-      }
-    }
-
-    // In-app notification for admins/accountants, independent of the email (best effort)
-    if (finalStatus === 'Enviado' && req.user.rol === 'cleaner') {
-      try {
-        await notifyReportSubmitted(await loadReportWithAuthor(reportId), grid);
-      } catch (notifyErr) {
-        console.error('Report notification failed:', notifyErr.message);
-      }
+      email = await deliverSubmittedReport(reportId);
     }
 
     res.status(201).json({
@@ -683,6 +665,74 @@ async function notifyReportSubmitted(report, grid) {
 }
 
 /**
+ * Delivers a submitted report: emails it to administration and notifies admins/accountants in the app.
+ * Neither step can fail the caller; problems are logged and the email outcome is returned.
+ * @param {number} reportId - reports.id (already in 'Enviado' state).
+ * @returns {Promise<{sent:boolean, to?:string, reason?:string, message?:string}>}
+ */
+async function deliverSubmittedReport(reportId) {
+  const report = await loadReportWithAuthor(reportId);
+
+  let email;
+  if (!isMailConfigured()) {
+    email = { sent: false, reason: 'not_configured' };
+  } else {
+    try {
+      const { to } = await sendReportEmail(report);
+      email = { sent: true, to };
+    } catch (mailErr) {
+      console.error('Report email failed:', mailErr.message);
+      email = { sent: false, reason: 'error', message: mailErr.message };
+    }
+  }
+
+  try {
+    const fechaInicio = toDateStr(report.fecha_inicio);
+    const fechaFin = toDateStr(report.fecha_fin);
+    const data = await buildReportData(Number(report.user_id), fechaInicio, fechaFin);
+    await notifyReportSubmitted(report, buildReportGrid(data.included_logs, fechaInicio, fechaFin));
+  } catch (notifyErr) {
+    console.error('Report notification failed:', notifyErr.message);
+  }
+
+  return email;
+}
+
+/**
+ * POST /api/reports/:id/submit
+ * The author sends a draft (or a report returned for correction) to administration:
+ * status becomes 'Enviado', the report is emailed with the Excel and admins/accountants are notified.
+ * It cannot be undone by the author; only an admin/accountant can return it ('Devuelto').
+ * The status change is atomic, so a double click or a second tab cannot send it twice.
+ */
+exports.submit = async (req, res) => {
+  try {
+    const report = await loadReportWithAuthor(req.params.id);
+    if (!report) return res.status(404).json({ message: 'Reporte no encontrado' });
+    if (Number(report.user_id) !== Number(req.user.id)) {
+      return res.status(403).json({ message: 'Solo quien generó el reporte puede enviarlo' });
+    }
+
+    const [result] = await db.query(
+      `UPDATE reports SET estado = 'Enviado' WHERE id = ? AND estado IN ('Borrador', 'Devuelto')`,
+      [report.id]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(409).json({
+        message: report.estado === 'Enviado'
+          ? 'Este reporte ya fue enviado'
+          : `Un reporte en estado ${report.estado} no se puede enviar`,
+      });
+    }
+
+    const email = await deliverSubmittedReport(report.id);
+    return res.json({ id: Number(report.id), estado: 'Enviado', email });
+  } catch (err) {
+    return res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
+/**
  * POST /api/reports/:id/send-email
  * Sends (or re-sends) the report by email to the admin address.
  * The author can send their own report; admin/accountant can send any.
@@ -693,6 +743,9 @@ exports.sendEmail = async (req, res) => {
     if (!report) return res.status(404).json({ message: 'Reporte no encontrado' });
     if (!canAccessAllReports(req.user.rol) && Number(report.user_id) !== Number(req.user.id)) {
       return res.status(403).json({ message: 'No tienes acceso a este reporte' });
+    }
+    if (report.estado === 'Borrador') {
+      return res.status(409).json({ message: 'Este reporte aún es un borrador. Envíalo primero con "Enviar reporte".' });
     }
     if (!isMailConfigured()) {
       return res.status(503).json({ message: 'El envío de correo no está configurado en el servidor' });
