@@ -29,17 +29,24 @@ function plannerDayOfWeek(dateStr) {
   return js === 0 ? 7 : js;
 }
 
+// Same anchor as the frontend (src/utils/cycle.js) and the billing periods:
+// the week starting Monday 9 Nov 2026 is cycle week 4.
+const CYCLE_ANCHOR_MONDAY = '2026-11-09';
+const CYCLE_ANCHOR_WEEK = 4;
+
 /**
- * Rolling 4-week cycle index (1–4) aligned to a fixed Monday anchor.
+ * Rolling 4-week cycle index (1–4) for a date, aligned to the shared Monday anchor.
+ * Works for dates before and after the anchor.
  * @param {string} dateStr - YYYY-MM-DD.
  * @returns {number}
  */
 function plannerCycleWeek(dateStr) {
-  const anchor = new Date('2024-01-01T12:00:00');
-  const d = new Date(`${dateStr}T12:00:00`);
-  const diffDays = Math.floor((d - anchor) / 86400000);
-  const weekIndex = Math.floor(diffDays / 7);
-  return (weekIndex % 4) + 1;
+  const d = new Date(`${dateStr}T12:00:00Z`);
+  const monday = new Date(d);
+  monday.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  const anchor = new Date(`${CYCLE_ANCHOR_MONDAY}T12:00:00Z`);
+  const diffWeeks = Math.round((monday - anchor) / (7 * 86400000));
+  return ((((CYCLE_ANCHOR_WEEK - 1 + diffWeeks) % 4) + 4) % 4) + 1;
 }
 
 /**
@@ -285,6 +292,7 @@ async function getCleanerStats(userId) {
                 COALESCE(NULLIF(s.direccion_linea1, ''), ''),
                 IF(s.suburb IS NOT NULL AND TRIM(s.suburb) <> '', CONCAT(', ', s.suburb), '')
               )) AS nombre,
+              s.state, s.postcode, s.country, s.latitud, s.longitud,
               SUM(COALESCE(i.display_value, 0)) AS horas
        FROM team_site_cycle_plan p
        INNER JOIN team_site_cycle_plan_items i ON i.plan_id = p.id
@@ -293,7 +301,7 @@ async function getCleanerStats(userId) {
          AND p.cycle_week = ?
          AND i.day_of_week = ?
          AND (p.active = 1 OR p.active IS NULL)
-       GROUP BY s.id, s.direccion_linea1, s.suburb
+       GROUP BY s.id, s.direccion_linea1, s.suburb, s.state, s.postcode, s.country, s.latitud, s.longitud
        ORDER BY s.id`,
       [teamId, cycleWeek, dow]
     );
@@ -301,6 +309,10 @@ async function getCleanerStats(userId) {
       site_id: Number(row.site_id),
       nombre: row.nombre || `Sitio ${row.site_id}`,
       horas: Number(row.horas) || 0,
+      // Full address + coordinates (when stored) so the dashboard can draw today's route
+      direccion: [row.nombre, row.state, row.postcode, row.country || 'Australia'].filter(Boolean).join(', '),
+      lat: row.latitud != null ? Number(row.latitud) : null,
+      lng: row.longitud != null ? Number(row.longitud) : null,
     }));
   }
 
