@@ -301,6 +301,10 @@ async function getCleanerStats(userId) {
          AND p.cycle_week = ?
          AND i.day_of_week = ?
          AND (p.active = 1 OR p.active IS NULL)
+         AND EXISTS (
+           SELECT 1 FROM team_site_assignments a
+           WHERE a.team_id = p.team_id AND a.site_id = p.site_id AND a.activo = 1
+         )
        GROUP BY s.id, s.direccion_linea1, s.suburb, s.state, s.postcode, s.country, s.latitud, s.longitud
        ORDER BY s.id`,
       [teamId, cycleWeek, dow]

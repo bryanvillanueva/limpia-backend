@@ -76,6 +76,12 @@ exports.getWeekPlan = async (req, res) => {
              AND tsa.site_id = p.site_id
              AND tsa.activo = 1
        WHERE p.team_id = ? AND p.cycle_week = ?
+         -- Only sites the team still has: a site taken away from the team drops out of its planner
+         -- (its plan rows are kept, so assigning the site again brings the planning back)
+         AND EXISTS (
+           SELECT 1 FROM team_site_assignments a
+           WHERE a.team_id = p.team_id AND a.site_id = p.site_id AND a.activo = 1
+         )
        ORDER BY p.id`,
       [teamId, cycleWeek]
     );
