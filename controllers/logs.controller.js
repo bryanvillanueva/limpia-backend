@@ -428,26 +428,41 @@ exports.update = async (req, res) => {
       ? Number(display_value)
       : (current.display_value !== null ? Number(current.display_value) : null);
 
-    let assignment = null;
-    if (nextEntryType === 'SERVICE' || nextEntryType === 'BINS') {
-      assignment = await getAssignmentForUserSite(current.user_id, current.site_id);
-      if (!assignment) {
-        return res.status(400).json({
-          message: 'Este sitio no tiene una asignación activa para tu equipo. Selecciona "Otro" e ingresa el valor manualmente.',
-        });
-      }
-      if (nextEntryType === 'BINS' && !assignment.hace_bins) {
-        return res.status(400).json({ message: 'Este sitio no tiene bins habilitados (hace_bins = 0)' });
-      }
-    }
+    // The value of a SERVICE/BINS log comes from the site rates AT THE TIME it was registered. Editing a note or the
+    // date must not re-rate it with today's rates (hour changes only apply from the next cycle) nor require an active
+    // assignment (the log may have been received from another team). Rates are only used when the type changes.
+    const typeChanged = nextEntryType !== current.entry_type;
+    const keepRegisteredValue = !typeChanged && (nextEntryType === 'SERVICE' || nextEntryType === 'BINS');
 
-    const values = computeLogValues(
-      assignment,
-      nextEntryType || null,
-      display_value !== undefined ? Number(display_value) : customDisplayValue,
-      horas_trabajadas !== undefined ? horas_trabajadas : current.horas_trabajadas,
-      solo_bins !== undefined ? solo_bins : current.solo_bins
-    );
+    let values;
+    if (keepRegisteredValue) {
+      values = {
+        horasTrabajadas: current.horas_trabajadas,
+        soloBins: current.solo_bins,
+        displayValue: current.display_value,
+      };
+    } else {
+      let assignment = null;
+      if (nextEntryType === 'SERVICE' || nextEntryType === 'BINS') {
+        assignment = await getAssignmentForUserSite(current.user_id, current.site_id);
+        if (!assignment) {
+          return res.status(400).json({
+            message: 'Este sitio no tiene una asignación activa para tu equipo. Selecciona "Otro" e ingresa el valor manualmente.',
+          });
+        }
+        if (nextEntryType === 'BINS' && !assignment.hace_bins) {
+          return res.status(400).json({ message: 'Este sitio no tiene bins habilitados (hace_bins = 0)' });
+        }
+      }
+
+      values = computeLogValues(
+        assignment,
+        nextEntryType || null,
+        display_value !== undefined ? Number(display_value) : customDisplayValue,
+        horas_trabajadas !== undefined ? horas_trabajadas : current.horas_trabajadas,
+        solo_bins !== undefined ? solo_bins : current.solo_bins
+      );
+    }
 
     const [result] = await db.query(
       `UPDATE daily_site_logs

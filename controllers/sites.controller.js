@@ -662,6 +662,35 @@ exports.assignTeam = async (req, res) => {
   }
 };
 
+/**
+ * DELETE /sites/:id/assign/:teamId — takes a site away from a team.
+ *
+ * Soft removal: the assignment is only marked inactive (activo = 0). Nothing is deleted, so the
+ * team's logs, reports and past planner data stay as they are. Once inactive, the site no longer
+ * appears in the team's planner, "Registrar Logs" or today's sites; assigning it again brings the
+ * planning back.
+ */
+exports.unassignTeam = async (req, res) => {
+  const siteId = Number(req.params.id);
+  const teamId = Number(req.params.teamId);
+  if (!Number.isInteger(siteId) || !Number.isInteger(teamId)) {
+    return res.status(400).json({ message: 'Sitio o equipo inválido' });
+  }
+
+  try {
+    const [result] = await db.query(
+      'UPDATE team_site_assignments SET activo = 0 WHERE team_id = ? AND site_id = ? AND activo = 1',
+      [teamId, siteId]
+    );
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'Este equipo no tiene asignado este sitio' });
+    }
+    res.json({ message: 'Sitio quitado del equipo. Sus registros y reportes se conservan.' });
+  } catch (err) {
+    res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
 exports.getComments = async (req, res) => {
   try {
     const [rows] = await db.query(

@@ -1,6 +1,6 @@
 const db = require('../config/db');
 const { createNotification } = require('../services/notifications.service');
-const { copyLogs } = require('../services/logSharing.service');
+const { stageLogs, acceptShare, previewShare } = require('../services/logSharing.service');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MONTHS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
@@ -77,7 +77,9 @@ exports.getRecipients = async (req, res) => {
 /**
  * POST /log-shares
  * Offers the sender's logs for a date range to another cleaner and notifies them.
- * Nothing is copied until the recipient accepts.
+ * The logs are STAGED at this moment (frozen copy), so the recipient receives exactly what was offered:
+ * logs the sender adds, edits or deletes afterwards do not change the request.
+ * Nothing is created for the recipient until they accept.
  * Body: { fecha_inicio, fecha_fin, recipient_id } for a teammate, or { fecha_inicio, fecha_fin, recipient_email }
  * for anyone else (another team or no team).
  */
@@ -144,16 +146,23 @@ exports.create = async (req, res) => {
     await conn.beginTransaction();
     const [result] = await conn.query(
       `INSERT INTO log_shares (sender_id, recipient_id, fecha_inicio, fecha_fin, logs_count)
-       VALUES (?, ?, ?, ?, ?)`,
-      [req.user.id, recipient.id, fechaInicio, fechaFin, Number(total)]
+       VALUES (?, ?, ?, ?, 0)`,
+      [req.user.id, recipient.id, fechaInicio, fechaFin]
     );
+    // Freeze what is being offered; this number is the exact amount the recipient will be offered
+    const staged = await stageLogs(conn, { shareId: result.insertId, senderId: req.user.id, fechaInicio, fechaFin });
+    if (staged === 0) {
+      await conn.rollback();
+      return res.status(400).json({ message: 'Necesitas al menos un log registrado en ese periodo para compartir' });
+    }
+    await conn.query('UPDATE log_shares SET logs_count = ? WHERE id = ?', [staged, result.insertId]);
     await createNotification(conn, {
       userId: recipient.id,
       type: 'log_share_request',
       title: `${fullName(sender)} quiere compartirte sus logs`,
-      message: `${fmtShort(fechaInicio)} – ${fmtShort(fechaFin)} · ${logsLabel(Number(total))}. ¿Quieres recibirlos?`,
+      message: `${fmtShort(fechaInicio)} – ${fmtShort(fechaFin)} · ${logsLabel(staged)}. Revísalos y decide si quieres recibirlos.`,
       refId: result.insertId,
-      data: { sender_id: sender.id, fecha_inicio: fechaInicio, fecha_fin: fechaFin, logs_count: Number(total) },
+      data: { sender_id: sender.id, fecha_inicio: fechaInicio, fecha_fin: fechaFin, logs_count: staged },
     });
     await conn.commit();
 
@@ -161,7 +170,7 @@ exports.create = async (req, res) => {
       id: result.insertId,
       status: 'pending',
       recipient: { id: recipient.id, nombre: recipient.nombre, apellido: recipient.apellido },
-      logs_count: Number(total),
+      logs_count: staged,
     });
   } catch (err) {
     try { await conn.rollback(); } catch { /* no open transaction */ }
@@ -211,9 +220,45 @@ async function markRequestNotificationRead(conn, shareId) {
 }
 
 /**
+ * GET /log-shares/:id/preview  (recipient)
+ * What accepting would do, log by log: which offered logs would be created and which the recipient already has
+ * (with their own value, so differences are visible). Reads only; nothing is created.
+ */
+exports.preview = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT ls.id, ls.sender_id, ls.recipient_id, ls.status,
+              DATE_FORMAT(ls.fecha_inicio, '%Y-%m-%d') AS fecha_inicio,
+              DATE_FORMAT(ls.fecha_fin, '%Y-%m-%d') AS fecha_fin,
+              u.nombre AS sender_nombre, u.apellido AS sender_apellido
+       FROM log_shares ls
+       JOIN users u ON u.id = ls.sender_id
+       WHERE ls.id = ?`,
+      [req.params.id]
+    );
+    const share = rows[0];
+    if (!share || Number(share.recipient_id) !== Number(req.user.id)) {
+      return res.status(404).json({ message: 'Solicitud no encontrada' });
+    }
+
+    const preview = await previewShare(db, share, req.user.id);
+    return res.json({
+      id: Number(share.id),
+      status: share.status,
+      sender: { id: Number(share.sender_id), nombre: share.sender_nombre, apellido: share.sender_apellido },
+      fecha_inicio: share.fecha_inicio,
+      fecha_fin: share.fecha_fin,
+      ...preview,
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Error del servidor', error: err.message });
+  }
+};
+
+/**
  * POST /log-shares/:id/accept  (recipient)
- * Copies the sender's logs of the range into the recipient's logs (missing ones only)
- * and tells the sender how many were synced.
+ * Creates for the recipient the logs that were offered (the staged copy; missing ones only, existing
+ * logs are never overwritten) and tells the sender how many were synced.
  */
 exports.accept = async (req, res) => {
   const conn = await db.getConnection();
@@ -225,12 +270,8 @@ exports.accept = async (req, res) => {
       return res.status(error.status).json({ message: error.message });
     }
 
-    const summary = await copyLogs(conn, {
-      sourceUserId: share.sender_id,
-      targetUserId: share.recipient_id,
-      fechaInicio: share.fecha_inicio,
-      fechaFin: share.fecha_fin,
-    });
+    // Creates exactly the logs that were offered (the staged copy), never the sender's later changes
+    const summary = await acceptShare(conn, share, share.recipient_id);
 
     await conn.query(
       `UPDATE log_shares

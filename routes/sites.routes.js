@@ -20,6 +20,7 @@ router.post('/import', auth, adminOnly, uploadSpreadsheet.single('file'), ctrl.i
 router.put('/:id', auth, adminOnly, ctrl.update);
 router.delete('/:id', auth, adminOnly, ctrl.deactivate);
 router.post('/:id/assign', auth, adminOnly, ctrl.assignTeam);
+router.delete('/:id/assign/:teamId', auth, adminOnly, ctrl.unassignTeam);
 router.post('/:id/comments', auth, ctrl.addComment);
 
 module.exports = router;

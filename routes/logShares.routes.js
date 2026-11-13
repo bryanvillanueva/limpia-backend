@@ -7,6 +7,7 @@ const ctrl = require('../controllers/logShares.controller');
 const cleanerOnly = roleGuard(['cleaner']);
 
 router.get('/recipients', auth, cleanerOnly, ctrl.getRecipients);
+router.get('/:id/preview', auth, cleanerOnly, ctrl.preview);
 router.post('/', auth, cleanerOnly, ctrl.create);
 router.post('/:id/accept', auth, cleanerOnly, ctrl.accept);
 router.post('/:id/reject', auth, cleanerOnly, ctrl.reject);
